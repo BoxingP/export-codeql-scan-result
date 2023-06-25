@@ -30,7 +30,7 @@ def export_summary_to_excel(excel_writer, dataframe):
         workbook.add_worksheet(worksheet_name)
     dataframe.to_excel(excel_writer, sheet_name=worksheet_name, index=False)
     worksheet = excel_writer.sheets[worksheet_name]
-    column_widths = [45, 13, 26]
+    column_widths = [45, 25, 26]
     for i, width in enumerate(column_widths):
         worksheet.set_column(i, i, width)
 
@@ -137,6 +137,16 @@ df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'], cate
                                               ordered=True)
 df_summary = df_summary.sort_values('Severity Level')
 df_summary = df_summary.reset_index(drop=True)
+level_totals = df_summary.groupby('Severity Level')['Types of Vulnerabilities'].nunique()
+appear_totals = df_summary.groupby('Severity Level')['Number of Appears in Code'].sum()
+appear_total_count = appear_totals.sum()
+total_severity_levels = []
+for index in level_totals.index:
+    if level_totals.loc[index] != 0:
+        total_severity_levels.append(f'{index}: {level_totals.loc[index]}')
+severity_levels_string = ', '.join(total_severity_levels)
+total_row = pd.Series(['Total', severity_levels_string, appear_total_count], index=df_summary.columns)
+df_summary = pd.concat([df_summary, pd.DataFrame([total_row])], ignore_index=True)
 export_summary_to_excel(writer, df_summary)
 
 df_details = pd.DataFrame({
