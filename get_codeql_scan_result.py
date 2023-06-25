@@ -38,9 +38,12 @@ def export_summary_to_excel(excel_writer, dataframe):
 def extract_help_info(info):
     title = info.split('\n')[0].split('#')[1].strip()
     description = re.search(r"#.*?\n(.*?)\n\n## Recommendation", info, re.DOTALL).group(1).strip()
-    recommendation = re.search(r"## Recommendation\n(.*?)\n\n## Example", info, re.DOTALL).group(1).strip()
-    example = re.search(r"## Example\n(.*?)\n\n## References", info, re.DOTALL).group(1).strip()
-    references = re.search(r"## References\n(.*)", info, re.DOTALL).group(1).strip()
+    recommendation = re.search(r"## Recommendation\n(.*?)\n\n(?:## Example|\n## References|$)", info, re.DOTALL).group(
+        1).strip()
+    example_match = re.search(r"## Example\n(.*?)\n\n(?:## References|$)", info, re.DOTALL)
+    example = example_match.group(1).strip() if example_match else ""
+    references_match = re.search(r"## References\n(.*)", info, re.DOTALL)
+    references = references_match.group(1).strip() if references_match else ""
     return {'title': title, 'detailed_description': description, 'recommendation': recommendation, 'example': example,
             'references': references}
 
@@ -80,6 +83,16 @@ def get_alert_details(access_token, owner, repo, alert_id):
         return None
 
 
+def filter_alerts(alerts):
+    open_alert_ids = []
+    for alert in alerts:
+        if alert['state'] == 'open' and alert['rule'].get('security_severity_level') is not None and \
+                alert['rule'].get('security_severity_level') in \
+                decouple_config('SEVERITY_LEVEL_TO_REPORT', cast=lambda x: x.split(',')):
+            open_alert_ids.append(alert['number'])
+    return open_alert_ids
+
+
 def get_open_alert_ids(access_token, owner, repo):
     url = f"https://api.github.com/repos/{owner}/{repo}/code-scanning/alerts"
     headers = {
@@ -91,13 +104,13 @@ def get_open_alert_ids(access_token, owner, repo):
     open_alert_ids = []
     if response.status_code == 200:
         alerts = response.json()
-        open_alert_ids.extend(alert["number"] for alert in alerts if alert["state"] == "open")
+        open_alert_ids.extend(filter_alerts(alerts))
         while "next" in response.links:
             next_page_url = response.links["next"]["url"]
             response = requests.get(next_page_url, headers=headers)
             if response.status_code == 200:
                 alerts = response.json()
-                open_alert_ids.extend(alert["number"] for alert in alerts if alert["state"] == "open")
+                open_alert_ids.extend(filter_alerts(alerts))
             else:
                 print("Failed to retrieve next page of CodeQL alerts:", response.text)
                 break
@@ -132,9 +145,9 @@ severity_mapping = \
         'severity_level']
 df_summary['Severity Level'] = df_summary['Types of Vulnerabilities'].map(severity_mapping)
 df_summary = df_summary.reindex(columns=['Types of Vulnerabilities', 'Severity Level', 'Number of Appears in Code'])
-severity_level_order = ['critical', 'high', 'medium', 'low']
-df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'], categories=severity_level_order,
-                                              ordered=True)
+df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'],
+                                              categories=decouple_config('SEVERITY_LEVEL_ORDER',
+                                                                         cast=lambda x: x.split(',')), ordered=True)
 df_summary = df_summary.sort_values('Severity Level')
 df_summary = df_summary.reset_index(drop=True)
 level_totals = df_summary.groupby('Severity Level')['Types of Vulnerabilities'].nunique()
