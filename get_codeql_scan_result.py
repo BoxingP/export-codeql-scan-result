@@ -109,7 +109,8 @@ def get_open_alert_ids(access_token, owner, repo):
 output_directory = os.path.abspath(os.sep.join([os.path.abspath(os.sep), decouple_config('OUTPUT_DIRECTORY')]))
 if not os.path.exists(output_directory):
     os.makedirs(output_directory)
-output_path = os.path.join(output_directory, decouple_config('OUTPUT_FILE'))
+output_path = os.path.join(output_directory,
+                           f"{decouple_config('GITHUB_REPO').lower().replace('-', '_')}_{decouple_config('OUTPUT_FILE')}")
 writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
 
 df_alerts = pd.DataFrame(
