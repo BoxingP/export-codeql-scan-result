@@ -132,6 +132,11 @@ severity_mapping = \
         'severity_level']
 df_summary['Severity Level'] = df_summary['Types of Vulnerabilities'].map(severity_mapping)
 df_summary = df_summary.reindex(columns=['Types of Vulnerabilities', 'Severity Level', 'Number of Appears in Code'])
+severity_level_order = ['critical', 'high', 'medium', 'low']
+df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'], categories=severity_level_order,
+                                              ordered=True)
+df_summary = df_summary.sort_values('Severity Level')
+df_summary = df_summary.reset_index(drop=True)
 export_summary_to_excel(writer, df_summary)
 
 df_details = pd.DataFrame({
