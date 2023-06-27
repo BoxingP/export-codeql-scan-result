@@ -1,38 +1,80 @@
-import os
 import re
+from pathlib import Path
 
 import pandas as pd
 import requests
-
 from decouple import config as decouple_config
 
 
-def export_details_to_excel(excel_writer, dataframe):
-    workbook = excel_writer.book
+def export_details_to_excel(writer, dataframe):
+    workbook = writer.book
     worksheet_name = 'Details (VULs in Code)'
     if worksheet_name in workbook.sheetnames:
         workbook[worksheet_name].clear()
     else:
         workbook.add_worksheet(worksheet_name)
-    dataframe.to_excel(excel_writer, sheet_name=worksheet_name, index=False)
-    worksheet = excel_writer.sheets[worksheet_name]
+    dataframe.to_excel(writer, sheet_name=worksheet_name, index=False)
+    worksheet = writer.sheets[worksheet_name]
     column_widths = [45, 13, 105, 65, 13, 65, 65, 65, 65]
     for i, width in enumerate(column_widths):
         worksheet.set_column(i, i, width)
 
 
-def export_summary_to_excel(excel_writer, dataframe):
-    workbook = excel_writer.book
+def export_summary_to_excel(writer, dataframe):
+    workbook = writer.book
     worksheet_name = 'Summary'
     if worksheet_name in workbook.sheetnames:
         workbook[worksheet_name].clear()
     else:
         workbook.add_worksheet(worksheet_name)
-    dataframe.to_excel(excel_writer, sheet_name=worksheet_name, index=False)
-    worksheet = excel_writer.sheets[worksheet_name]
+    dataframe.to_excel(writer, sheet_name=worksheet_name, index=False)
+    worksheet = writer.sheets[worksheet_name]
     column_widths = [45, 25, 26]
     for i, width in enumerate(column_widths):
         worksheet.set_column(i, i, width)
+
+
+def process_details(dataframe):
+    df_details = pd.DataFrame({
+        'Types of Vulnerabilities': dataframe['types_of_vulnerabilities'],
+        'Severity Level': dataframe['severity_level'],
+        'Summary': dataframe['summary'],
+        'Location Path': dataframe['location_path'],
+        'Location Line': dataframe['location_line'],
+        'Detailed Description': dataframe['detailed_description'],
+        'Recommendation': dataframe['recommendation'],
+        'Example': dataframe['example'],
+        'References': dataframe['references']
+    })
+    return df_details
+
+
+def generate_summary(dataframe):
+    counts = dataframe.groupby('types_of_vulnerabilities').size()
+    df_summary = pd.DataFrame(counts, columns=['Number of Appears in Code']).reset_index()
+    df_summary.columns = ['Types of Vulnerabilities', 'Number of Appears in Code']
+    severity_mapping = \
+        dataframe[['types_of_vulnerabilities', 'severity_level']].drop_duplicates().set_index(
+            'types_of_vulnerabilities')[
+            'severity_level']
+    df_summary['Severity Level'] = df_summary['Types of Vulnerabilities'].map(severity_mapping)
+    df_summary = df_summary.reindex(columns=['Types of Vulnerabilities', 'Severity Level', 'Number of Appears in Code'])
+    df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'],
+                                                  categories=decouple_config('SEVERITY_LEVEL_ORDER',
+                                                                             cast=lambda x: x.split(',')), ordered=True)
+    df_summary = df_summary.sort_values('Severity Level')
+    df_summary = df_summary.reset_index(drop=True)
+    level_totals = df_summary.groupby('Severity Level')['Types of Vulnerabilities'].nunique()
+    appear_totals = df_summary.groupby('Severity Level')['Number of Appears in Code'].sum()
+    appear_total_count = appear_totals.sum()
+    total_severity_levels = []
+    for index in level_totals.index:
+        if level_totals.loc[index] != 0:
+            total_severity_levels.append(f'{index}: {level_totals.loc[index]}')
+    severity_levels_string = ', '.join(total_severity_levels)
+    total_row = pd.Series(['Total', severity_levels_string, appear_total_count], index=df_summary.columns)
+    df_summary = pd.concat([df_summary, pd.DataFrame([total_row])], ignore_index=True)
+    return df_summary
 
 
 def extract_help_info(info):
@@ -119,60 +161,41 @@ def get_open_alert_ids(access_token, owner, repo):
     return open_alert_ids
 
 
-output_directory = os.path.abspath(os.sep.join([os.path.abspath(os.sep), decouple_config('OUTPUT_DIRECTORY')]))
-if not os.path.exists(output_directory):
-    os.makedirs(output_directory)
-output_path = os.path.join(output_directory,
-                           f"{decouple_config('GITHUB_REPO').lower().replace('-', '_')}_{decouple_config('OUTPUT_FILE')}")
-writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
+def process_alerts():
+    df_alerts = pd.DataFrame(
+        columns=['number', 'state', 'types_of_vulnerabilities', 'severity_level', 'rule_id', 'summary', 'location_path',
+                 'location_line', 'detailed_description', 'recommendation', 'example', 'references'])
+    security_ids = get_open_alert_ids(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
+                                      decouple_config('GITHUB_REPO'))
+    for security_id in security_ids:
+        security_details = get_alert_details(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
+                                             decouple_config('GITHUB_REPO'), security_id)
+        df_alerts = pd.concat([df_alerts, pd.DataFrame([parse_details(security_details)])], ignore_index=True)
+    return df_alerts
 
-df_alerts = pd.DataFrame(
-    columns=['number', 'state', 'types_of_vulnerabilities', 'severity_level', 'rule_id', 'summary',
-             'location_path', 'location_line', 'detailed_description', 'recommendation', 'example', 'references']
-)
-security_ids = get_open_alert_ids(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
-                                  decouple_config('GITHUB_REPO'))
-for security_id in security_ids:
-    security_details = get_alert_details(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
-                                         decouple_config('GITHUB_REPO'), security_id)
-    df_alerts = pd.concat([df_alerts, pd.DataFrame([parse_details(security_details)])], ignore_index=True)
 
-counts = df_alerts.groupby('types_of_vulnerabilities').size()
-df_summary = pd.DataFrame(counts, columns=['Number of Appears in Code']).reset_index()
-df_summary.columns = ['Types of Vulnerabilities', 'Number of Appears in Code']
-severity_mapping = \
-    df_alerts[['types_of_vulnerabilities', 'severity_level']].drop_duplicates().set_index('types_of_vulnerabilities')[
-        'severity_level']
-df_summary['Severity Level'] = df_summary['Types of Vulnerabilities'].map(severity_mapping)
-df_summary = df_summary.reindex(columns=['Types of Vulnerabilities', 'Severity Level', 'Number of Appears in Code'])
-df_summary['Severity Level'] = pd.Categorical(df_summary['Severity Level'],
-                                              categories=decouple_config('SEVERITY_LEVEL_ORDER',
-                                                                         cast=lambda x: x.split(',')), ordered=True)
-df_summary = df_summary.sort_values('Severity Level')
-df_summary = df_summary.reset_index(drop=True)
-level_totals = df_summary.groupby('Severity Level')['Types of Vulnerabilities'].nunique()
-appear_totals = df_summary.groupby('Severity Level')['Number of Appears in Code'].sum()
-appear_total_count = appear_totals.sum()
-total_severity_levels = []
-for index in level_totals.index:
-    if level_totals.loc[index] != 0:
-        total_severity_levels.append(f'{index}: {level_totals.loc[index]}')
-severity_levels_string = ', '.join(total_severity_levels)
-total_row = pd.Series(['Total', severity_levels_string, appear_total_count], index=df_summary.columns)
-df_summary = pd.concat([df_summary, pd.DataFrame([total_row])], ignore_index=True)
-export_summary_to_excel(writer, df_summary)
+def build_output_path(directory):
+    repo_name = decouple_config('GITHUB_REPO').lower().replace('-', '_')
+    output_filename = decouple_config('OUTPUT_FILE')
+    return Path(directory, f'{repo_name}_{output_filename}')
 
-df_details = pd.DataFrame({
-    'Types of Vulnerabilities': df_alerts['types_of_vulnerabilities'],
-    'Severity Level': df_alerts['severity_level'],
-    'Summary': df_alerts['summary'],
-    'Location Path': df_alerts['location_path'],
-    'Location Line': df_alerts['location_line'],
-    'Detailed Description': df_alerts['detailed_description'],
-    'Recommendation': df_alerts['recommendation'],
-    'Example': df_alerts['example'],
-    'References': df_alerts['references']
-})
-export_details_to_excel(writer, df_details)
 
-writer.close()
+def create_output_directory():
+    output_directory = Path('/', decouple_config('OUTPUT_DIRECTORY')).resolve().absolute()
+    output_directory.mkdir(parents=True, exist_ok=True)
+    return output_directory
+
+
+def get_result():
+    output_directory = create_output_directory()
+    output_path = build_output_path(output_directory)
+    with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+        df_alerts = process_alerts()
+        df_summary = generate_summary(df_alerts)
+        export_summary_to_excel(writer, df_summary)
+        df_details = process_details(df_alerts)
+        export_details_to_excel(writer, df_details)
+
+
+if __name__ == '__main__':
+    get_result()
