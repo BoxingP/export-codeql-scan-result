@@ -181,7 +181,7 @@ def build_output_path(directory):
 
 
 def create_output_directory():
-    output_directory = Path('/', decouple_config('OUTPUT_DIRECTORY')).resolve().absolute()
+    output_directory = Path('/', *decouple_config('OUTPUT_DIRECTORY', cast=lambda x: x.split(','))).resolve().absolute()
     output_directory.mkdir(parents=True, exist_ok=True)
     return output_directory
 
