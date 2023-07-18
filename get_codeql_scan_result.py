@@ -2,8 +2,9 @@ import re
 from pathlib import Path
 
 import pandas as pd
-import requests
 from decouple import config as decouple_config
+
+from github_repo import GitHubRepo
 
 
 def export_details_to_excel(writer, dataframe):
@@ -109,67 +110,15 @@ def parse_details(details):
     return data
 
 
-def get_alert_details(access_token, owner, repo, alert_id):
-    url = f"https://api.github.com/repos/{owner}/{repo}/code-scanning/alerts/{alert_id}"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        alert_details = response.json()
-        return alert_details
-    else:
-        print("Failed to retrieve CodeQL alert details:", response.text)
-        return None
-
-
-def filter_alerts(alerts):
-    open_alert_ids = []
-    for alert in alerts:
-        if alert['state'] == 'open' and alert['rule'].get('security_severity_level') is not None and \
-                alert['rule'].get('security_severity_level') in \
-                decouple_config('SEVERITY_LEVEL_TO_REPORT', cast=lambda x: x.split(',')):
-            open_alert_ids.append(alert['number'])
-    return open_alert_ids
-
-
-def get_open_alert_ids(access_token, owner, repo):
-    url = f"https://api.github.com/repos/{owner}/{repo}/code-scanning/alerts"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    response = requests.get(url, headers=headers)
-
-    open_alert_ids = []
-    if response.status_code == 200:
-        alerts = response.json()
-        open_alert_ids.extend(filter_alerts(alerts))
-        while "next" in response.links:
-            next_page_url = response.links["next"]["url"]
-            response = requests.get(next_page_url, headers=headers)
-            if response.status_code == 200:
-                alerts = response.json()
-                open_alert_ids.extend(filter_alerts(alerts))
-            else:
-                print("Failed to retrieve next page of CodeQL alerts:", response.text)
-                break
-    else:
-        print("Failed to retrieve CodeQL alerts:", response.text)
-    return open_alert_ids
-
-
 def process_alerts():
+    github_repo = GitHubRepo(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
+                             decouple_config('GITHUB_REPO'))
     df_alerts = pd.DataFrame(
         columns=['number', 'state', 'types_of_vulnerabilities', 'severity_level', 'rule_id', 'summary', 'location_path',
                  'location_line', 'detailed_description', 'recommendation', 'example', 'references'])
-    security_ids = get_open_alert_ids(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
-                                      decouple_config('GITHUB_REPO'))
+    security_ids = github_repo.get_open_alert_ids()
     for security_id in security_ids:
-        security_details = get_alert_details(decouple_config('GITHUB_ACCESS_TOKEN'), decouple_config('GITHUB_OWNER'),
-                                             decouple_config('GITHUB_REPO'), security_id)
+        security_details = github_repo.get_alert_details(security_id)
         df_alerts = pd.concat([df_alerts, pd.DataFrame([parse_details(security_details)])], ignore_index=True)
     return df_alerts
 
